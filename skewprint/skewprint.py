@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 
-import datetime, threading, socket, sys, select, ssl, random, urlparse, argparse
+import threading, socket, sys, select, ssl, random, argparse
+from urllib.parse import urlparse
+from datetime import datetime, timedelta
 
 # try to remove scapy because installing it on windows sucks and it's not python 3 compat.
-import scapy.layers.inet
+#import scapy.layers.inet
+from scapy.all import *
 import scapy_http.http # https://github.com/invernizzi/scapy-http
 
 ''' 
@@ -29,13 +32,15 @@ import scapy_http.http # https://github.com/invernizzi/scapy-http
 	Rewrite in compiled language
 '''
 
+########################################################################################################################
+
 def send_loop(counter):
 	global basetime, sock, running, wait, verbose, payload, max_count
 
 	# Request timestamps every wait seconds. The extra random delay is to prevent sampling bias.
 	tick_offset = counter*wait + random.uniform(0,1)*wait
-	next_tick = basetime + datetime.timedelta(0, tick_offset)
-	t = threading.Timer((next_tick - datetime.datetime.utcnow()).total_seconds(),
+	next_tick = basetime + timedelta(0, tick_offset)
+	t = threading.Timer((next_tick - datetime.utcnow()).total_seconds(),
 	                    lambda:send_loop(counter))
 	if running:
 		t.start()
@@ -43,7 +48,7 @@ def send_loop(counter):
 		if counter > max_count and max_count != 0:
 			running = False
 		try:
-			sock.send(payload)
+			sock.send(payload.encode())
 		except:
 			#TODO: Handle writes to closed sockets
 			if not running:
@@ -51,7 +56,11 @@ def send_loop(counter):
 			else:
 				raise
 		if verbose:
-			print "%d\t%.6f\t%s" % (counter, tick_offset, datetime.datetime.utcnow())
+			print("%d\t%.6f\t%s" % (counter, tick_offset, datetime.utcnow()))
+
+########################################################################################################################
+# url #
+#######
 
 # TODO: descend from urlparse?
 class url():
@@ -72,6 +81,8 @@ class url():
 											  'proto':socket.IPPROTO_TCP})
 	bad_addresses = ("127.0.53.53", "0.0.0.0")
 
+	####################################################################################################################
+
 	def __init__(self, scheme, netloc, username, password, hostname, port,
 	             path, query, fragment, address, tls, socktype, proto):
 		# TODO: combine tls and scheme into a scheme class
@@ -89,6 +100,8 @@ class url():
 		self.socktype=socktype
 		self.proto=proto
 
+	####################################################################################################################
+
 	def __str__(self):
 		return ("scheme: " + str(self.scheme) + "\n"
 		       "username: " + str(self.username) + "\n"
@@ -103,6 +116,8 @@ class url():
 				 "socktype: " + str(self.socktype) + "\n"
 				 "proto: " + str(self.proto))
 
+	####################################################################################################################
+
 	def resolve_host(self):
 		#TODO: Hostname if given IP address: gethostbyaddr? (for HTTP Host: header)
 		#TODO: IPv6 support: socket.getaddrinfo
@@ -112,6 +127,8 @@ class url():
 			msg = "Cannot resolve host: %s" % self.hostname
 			raise argparse.ArgumentTypeError(msg)
 
+	####################################################################################################################
+
 	@classmethod
 	def resolve(cls, url):
 		'''
@@ -120,6 +137,8 @@ class url():
 		url_obj = cls.parse(url)
 		url_obj.resolve_host()
 		return url_obj
+
+	####################################################################################################################
 
 	@classmethod
 	def parse(cls, url):
@@ -137,7 +156,8 @@ class url():
 		'''
 
 		# Fill in missing scheme and reparse so netloc won't be confused with path
-		splt = urlparse.urlsplit(url)
+		#splt = urlparse.urlsplit(url)
+		splt = urlparse(url)
 		if not splt.scheme:
 			url = "%s%s" % (cls.default_scheme, url)
 			splt = urlparse.urlsplit(url)
@@ -160,11 +180,11 @@ class url():
 			path = cls.default_path
 		if not port:
 			port = cls.supported_schemes['default']['port']
-			if cls.supported_schemes.has_key(scheme):
+			if scheme in cls.supported_schemes:
 				port = cls.supported_schemes[scheme]['port']
 
 		# Validate results
-		if not cls.supported_schemes.has_key(scheme):
+		if scheme not in cls.supported_schemes:
 			msg = "%s is not a supported protocol." % scheme
 			raise argparse.ArgumentTypeError(msg)
 		if not hostname:
@@ -179,6 +199,8 @@ class url():
 		return cls(scheme, netloc, username, password, hostname,
 		           port, path, query, fragment, address, tls, socktype, proto)
 
+########################################################################################################################
+
 def parse_args(argv):
 	parser = argparse.ArgumentParser(description="Gathers timestamps in order to perform clock skew-"
 		                                          "based remote physical device fingerprinting.")
@@ -189,6 +211,8 @@ def parse_args(argv):
 #  parser.add_argument("-f", "--logfile", type=argparse.FileType("ab"), default=False)
 	parser.add_argument("-q", "--quiet", action="store_true")
 	return parser.parse_args()
+
+########################################################################################################################
 
 def get_payload(url_obj):
 	scheme = url_obj.scheme
@@ -203,12 +227,16 @@ def get_payload(url_obj):
 		payload = ""
 	return payload
 
+########################################################################################################################
+
 def connect_sock(url_obj):
 	global sock
 	sock = socket.socket(socket.AF_INET, url_obj.socktype, url_obj.proto)
 	if url_obj.tls:
 		sock = ssl.wrap_socket(sock)
 	sock.connect((url_obj.address, url_obj.port))
+
+########################################################################################################################
 
 def main(argv):
 	global basetime, sock, running, wait, verbose, payload, max_count
@@ -223,17 +251,17 @@ def main(argv):
 
 	connect_sock(args.url)
 
-	print args.url
+	print(args.url)
 
-	basetime = datetime.datetime.utcnow()
+	basetime = datetime.utcnow()
 	send_loop(counter)
-	min_time = datetime.timedelta(0,20)
+	min_time = timedelta(0,20)
 
 	while running:
-		time_started = datetime.datetime.utcnow()
+		time_started = datetime.utcnow()
 		recv_loop(args.url.scheme)
 		sock.close()
-		time_finished = datetime.datetime.utcnow()
+		time_finished = datetime.utcnow()
 		duration = time_finished - time_started
 		if duration < min_time:
 			running = False
@@ -241,6 +269,8 @@ def main(argv):
 			connect_sock(args.url)
 
 	sock.close()
+
+########################################################################################################################
 
 def extract_timestamp(response, scheme):
 	timestamp = False
@@ -254,6 +284,8 @@ def extract_timestamp(response, scheme):
 			if response['ICMP'].type == icmp_timestamp_reply:
 				timestamp = max(response.ts_tx, response.ts_rx)
 	return timestamp
+
+########################################################################################################################
 
 def recv_loop(scheme):
 	global sock, verbose, running
@@ -277,11 +309,14 @@ def recv_loop(scheme):
 
 				data = sock.recv(1024)
 				if data:
-					print extract_timestamp(data, scheme)
+					print(extract_timestamp(data, scheme))
 				else:
 					if verbose:
-						print "%s\tNo Response" % datetime.datetime.utcnow()
+						print("%s\tNo Response" % datetime.utcnow())
 					return
 
+########################################################################################################################
+# main #
+########
 if __name__ == "__main__":
 	main(sys.argv)
